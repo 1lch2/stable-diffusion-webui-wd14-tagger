@@ -4,6 +4,15 @@ Interrogate booru style tags for single or multiple image files using various mo
 
 [한국어를 사용하시나요? 여기에 한국어 설명서가 있습니다!](README.ko.md)
 
+## Fork changes 
+Added wd14-swinv2-v2 and wd-eva02-large-tagger-v3 model from [SmilingWolf](https://huggingface.co/SmilingWolf)
+
+Added huggingface mirror for users in China.
+
+增加了 wd14-swinv2-v2， wd-eva02-large-tagger-v3 两个新的 tagger 模型。
+
+加入了国内的 huggingface 镜像，方便中国用户在webui里直接下载模型。
+
 ## Disclaimer
 I didn't make any models, and most of the code was heavily borrowed from the [DeepDanbooru](https://github.com/KichangKim/DeepDanbooru) and MrSmillingWolf's tagger.
 

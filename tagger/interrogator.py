@@ -391,11 +391,15 @@ class WaifuDiffusionInterrogator(Interrogator):
             model_path = hf_hub_download(
                 repo_id=self.repo_id,
                 filename=self.model_path,
-                cache_dir=cache)
+                cache_dir=cache,
+                endpoint="https://hf-mirror.com"
+                )
             tags_path = hf_hub_download(
                 repo_id=self.repo_id,
                 filename=self.tags_path,
-                cache_dir=cache)
+                cache_dir=cache,
+                endpoint="https://hf-mirror.com"
+                )
         else:
             model_path = self.local_model
             tags_path = self.local_tags
