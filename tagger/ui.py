@@ -3,17 +3,10 @@ from typing import Dict, Tuple, List, Optional
 import gradio as gr
 import re
 from PIL import Image
-from packaging import version
-
-try:
-    from tensorflow import __version__ as tf_version
-except ImportError:
-    tf_version = '0.0.0'
 
 from html import escape as html_esc
 
 from modules import ui  # pylint: disable=import-error
-from modules import generation_parameters_copypaste as parameters_copypaste  # pylint: disable=import-error # noqa
 
 try:
     from modules.call_queue import wrap_gradio_gpu_call
@@ -48,8 +41,8 @@ def unload_interrogators() -> Tuple[str]:
             else:
                 remaining_models = remaining_models + f'<li>{i.name}</li>'
     if remaining_models != '':
-        remaining_models = remaining_models + "Some tensorflow models could "\
-                           "not be unloaded, a known issue."
+        remaining_models = remaining_models + "Some models could "\
+                           "not be unloaded."
     QData.clear(1)
 
     return (f'{unloaded_models} model(s) unloaded{remaining_models}',)
@@ -213,21 +206,11 @@ def on_ui_tabs():
                             variant='primary'
                         )
                         with gr.Row(variant='compact'):
-                            with gr.Column(variant='panel'):
-                                large_query = utils.preset.component(
-                                    gr.Checkbox,
-                                    label='huge batch query (TF 2.10, '
-                                    'experimental)',
-                                    value=False,
-                                    interactive=version.parse(tf_version) ==
-                                    version.parse('2.10')
-                                )
-                            with gr.Column(variant='panel'):
-                                save_tags = utils.preset.component(
-                                    gr.Checkbox,
-                                    label='Save to tags files',
-                                    value=True
-                                )
+                            save_tags = utils.preset.component(
+                                gr.Checkbox,
+                                label='Save to tags files',
+                                value=True
+                            )
 
                 info = gr.HTML(
                     label='Info',
@@ -367,14 +350,6 @@ def on_ui_tabs():
                             elem_id='tags',
                         )
 
-                        with gr.Row():
-                            parameters_copypaste.bind_buttons(
-                                parameters_copypaste.create_buttons(
-                                    ["txt2img", "img2img"],
-                                ),
-                                None,
-                                tags
-                            )
                         rating_confidences = gr.Label(
                             label='Rating confidences',
                             elem_id='rating-confidences',
@@ -407,7 +382,6 @@ def on_ui_tabs():
         # register events
         # Checkboxes
         cumulative.input(fn=It.flip('cumulative'), inputs=[], outputs=[])
-        large_query.input(fn=It.flip('large_query'), inputs=[], outputs=[])
         unload_after.input(fn=It.flip('unload_after'), inputs=[], outputs=[])
 
         save_tags.input(fn=IOData.flip_save_tags(), inputs=[], outputs=[])

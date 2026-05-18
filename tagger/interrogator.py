@@ -3,17 +3,15 @@ import os
 from pathlib import Path
 import io
 import json
-import inspect
 from re import match as re_match
-from platform import system, uname
-from typing import Tuple, List, Dict, Callable
+from platform import system
+from typing import Tuple, Dict, Callable
 from pandas import read_csv
 from PIL import Image, UnidentifiedImageError
-from numpy import asarray, float32, expand_dims, exp
+from numpy import asarray, float32, expand_dims
 from tqdm import tqdm
 from huggingface_hub import hf_hub_download
 
-from modules.paths import extensions_dir
 from modules import shared
 from tagger import settings  # pylint: disable=import-error
 from tagger.uiset import QData, IOData  # pylint: disable=import-error
@@ -35,14 +33,8 @@ if shared.cmd_opts.additional_device_ids is not None:
         raise ValueError('--device-id is not cpu:<nr> or gpu:<nr>')
     if m.group(1) == 'c':
         onnxrt_providers.pop(0)
-    TF_DEVICE_NAME = f'/{shared.cmd_opts.additional_device_ids}'
 elif use_cpu:
-    TF_DEVICE_NAME = '/cpu:0'
     onnxrt_providers.pop(0)
-else:
-    TF_DEVICE_NAME = '/gpu:0'
-
-print(f'== WD14 tagger {TF_DEVICE_NAME}, {uname()} ==')
 
 
 class Interrogator:
@@ -50,7 +42,6 @@ class Interrogator:
     # the raw input and output.
     input = {
         "cumulative": False,
-        "large_query": False,
         "unload_after": False,
         "add": '',
         "keep": '',
@@ -110,13 +101,8 @@ class Interrogator:
         self.name = name
         self.model = None
         self.tags = None
-        # run_mode 0 is dry run, 1 means run (alternating), 2 means disabled
-        self.run_mode = 0 if hasattr(self, "large_batch_interrogate") else 2
 
     def load(self):
-        raise NotImplementedError()
-
-    def large_batch_interrogate(self, images: List, dry_run=False) -> str:
         raise NotImplementedError()
 
     def unload(self) -> bool:
@@ -206,27 +192,17 @@ class Interrogator:
         """ Interrogate all images in the input list """
         QData.clear(1 - Interrogator.input["cumulative"])
 
-        if Interrogator.input["large_query"] is True and self.run_mode < 2:
-            # TODO: write specified tags files instead of simple .txt
-            image_list = [str(x[0].resolve()) for x in IOData.paths]
-            self.large_batch_interrogate(image_list, self.run_mode == 0)
+        verb = getattr(shared.opts, 'tagger_verbose', True)
+        count = len(QData.query)
 
-            # alternating dry run and run modes
-            self.run_mode = (self.run_mode + 1) % 2
-            count = len(image_list)
-            Interrogator.output = QData.finalize(count)
-        else:
-            verb = getattr(shared.opts, 'tagger_verbose', True)
-            count = len(QData.query)
+        for i in tqdm(range(len(IOData.paths)), disable=verb, desc='Tags'):
+            self.batch_interrogate_image(i)
 
-            for i in tqdm(range(len(IOData.paths)), disable=verb, desc='Tags'):
-                self.batch_interrogate_image(i)
+        if Interrogator.input["unload_after"]:
+            self.unload()
 
-            if Interrogator.input["unload_after"]:
-                self.unload()
-
-            count = len(QData.query) - count
-            Interrogator.output = QData.finalize_batch(count)
+        count = len(QData.query) - count
+        Interrogator.output = QData.finalize_batch(count)
 
     def interrogate(
         self,
@@ -235,101 +211,6 @@ class Interrogator:
         Dict[str, float],  # rating confidences
         Dict[str, float]  # tag confidences
     ]:
-        raise NotImplementedError()
-
-
-class DeepDanbooruInterrogator(Interrogator):
-    """ Interrogator for DeepDanbooru models """
-    def __init__(self, name: str, project_path: os.PathLike) -> None:
-        super().__init__(name)
-        self.project_path = project_path
-        self.model = None
-        self.tags = None
-
-    def load(self) -> None:
-        print(f'Loading {self.name} from {str(self.project_path)}')
-
-        # deepdanbooru package is not include in web-sd anymore
-        # https://github.com/AUTOMATIC1111/stable-diffusion-webui/commit/c81d440d876dfd2ab3560410f37442ef56fc663
-        from launch import is_installed, run_pip
-        if not is_installed('deepdanbooru'):
-            package = os.environ.get(
-                'DEEPDANBOORU_PACKAGE',
-                'git+https://github.com/KichangKim/DeepDanbooru.'
-                'git@d91a2963bf87c6a770d74894667e9ffa9f6de7ff'
-            )
-
-            run_pip(
-                f'install {package} tensorflow tensorflow-io', 'deepdanbooru')
-
-        import tensorflow as tf
-
-        # tensorflow maps nearly all vram by default, so we limit this
-        # https://www.tensorflow.org/guide/gpu#limiting_gpu_memory_growth
-        # TODO: only run on the first run
-        for device in tf.config.experimental.list_physical_devices('GPU'):
-            try:
-                tf.config.experimental.set_memory_growth(device, True)
-            except RuntimeError as err:
-                print(err)
-
-        with tf.device(TF_DEVICE_NAME):
-            import deepdanbooru.project as ddp
-
-            self.model = ddp.load_model_from_project(
-                project_path=self.project_path,
-                compile_model=False
-            )
-
-            print(f'Loaded {self.name} model from {str(self.project_path)}')
-
-            self.tags = ddp.load_tags_from_project(
-                project_path=self.project_path
-            )
-
-    def unload(self) -> bool:
-        return False
-
-    def interrogate(
-        self,
-        image: Image
-    ) -> Tuple[
-        Dict[str, float],  # rating confidences
-        Dict[str, float]  # tag confidences
-    ]:
-        # init model
-        if self.model is None:
-            self.load()
-
-        import deepdanbooru.data as ddd
-
-        # convert an image to fit the model
-        image_bufs = io.BytesIO()
-        image.save(image_bufs, format='PNG')
-        image = ddd.load_image_for_evaluate(
-            image_bufs,
-            self.model.input_shape[2],
-            self.model.input_shape[1]
-        )
-
-        image = image.reshape((1, *image.shape[0:3]))
-
-        # evaluate model
-        result = self.model.predict(image)
-
-        confidences = result[0].tolist()
-        ratings = {}
-        tags = {}
-
-        for i, tag in enumerate(self.tags):
-            if tag[:7] != "rating:":
-                tags[tag] = confidences[i]
-            else:
-                ratings[tag[7:]] = confidences[i]
-
-        return ratings, tags
-
-    def large_batch_interrogate(self, images: List, dry_run=False) -> str:
         raise NotImplementedError()
 
 
@@ -392,13 +273,13 @@ class WaifuDiffusionInterrogator(Interrogator):
                 repo_id=self.repo_id,
                 filename=self.model_path,
                 cache_dir=cache,
-                endpoint="https://hf-mirror.com"
+                endpoint='https://hf-mirror.com'
                 )
             tags_path = hf_hub_download(
                 repo_id=self.repo_id,
                 filename=self.tags_path,
                 cache_dir=cache,
-                endpoint="https://hf-mirror.com"
+                endpoint='https://hf-mirror.com'
                 )
         else:
             model_path = self.local_model
@@ -488,177 +369,3 @@ class WaifuDiffusionInterrogator(Interrogator):
         tags = dict(tags[4:].values)
 
         return ratings, tags
-
-    def dry_run(self, images) -> Tuple[str, Callable[[str], None]]:
-
-        def process_images(filepaths, _):
-            lines = []
-            for image_path in filepaths:
-                image_path = image_path.numpy().decode("utf-8")
-                lines.append(f"{image_path}\n")
-            with io.open("dry_run_read.txt", "a", encoding="utf-8") as filen:
-                filen.writelines(lines)
-
-        scheduled = [f"{image_path}\n" for image_path in images]
-
-        # Truncate the file from previous runs
-        print("updating dry_run_read.txt")
-        io.open("dry_run_read.txt", "w", encoding="utf-8").close()
-        with io.open("dry_run_scheduled.txt", "w", encoding="utf-8") as filen:
-            filen.writelines(scheduled)
-        return process_images
-
-    def run(self, images, pred_model) -> Tuple[str, Callable[[str], None]]:
-        threshold = QData.threshold
-        self.tags["sanitized_name"] = self.tags["name"].map(
-            lambda i: i if i in Its.kaomojis else i.replace("_", " ")
-        )
-
-        def process_images(filepaths, images):
-            preds = pred_model(images).numpy()
-
-            for ipath, pred in zip(filepaths, preds):
-                ipath = ipath.numpy().decode("utf-8")
-
-                self.tags["preds"] = pred
-                generic = self.tags[self.tags["category"] == 0]
-                chosen = generic[generic["preds"] > threshold]
-                chosen = chosen.sort_values(by="preds", ascending=False)
-                tags_names = chosen["sanitized_name"]
-
-                key = ipath.split("/")[-1].split(".")[0] + "_" + self.name
-                QData.add_tags = tags_names
-                QData.apply_filters((ipath, '', {}, {}), key, False)
-
-                tags_string = ", ".join(tags_names)
-                txtfile = Path(ipath).with_suffix(".txt")
-                with io.open(txtfile, "w", encoding="utf-8") as filename:
-                    filename.write(tags_string)
-        return images, process_images
-
-    def large_batch_interrogate(self, images, dry_run=True) -> None:
-        """ Interrogate a large batch of images. """
-
-        # init model
-        if not hasattr(self, 'model') or self.model is None:
-            self.load()
-
-        os.environ["TF_XLA_FLAGS"] = '--tf_xla_auto_jit=2 '\
-                                     '--tf_xla_cpu_global_jit'
-        # Reduce logging
-        # os.environ["TF_CPP_MIN_LOG_LEVEL"] = "1"
-
-        import tensorflow as tf
-
-        from tagger.generator.tf_data_reader import DataGenerator
-
-        # tensorflow maps nearly all vram by default, so we limit this
-        # https://www.tensorflow.org/guide/gpu#limiting_gpu_memory_growth
-        # TODO: only run on the first run
-        gpus = tf.config.experimental.list_physical_devices("GPU")
-        if gpus:
-            for device in gpus:
-                try:
-                    tf.config.experimental.set_memory_growth(device, True)
-                except RuntimeError as err:
-                    print(err)
-
-        if dry_run:  # dry run
-            height, width = 224, 224
-            process_images = self.dry_run(images)
-        else:
-            _, height, width, _ = self.model.inputs[0].shape
-
-            @tf.function
-            def pred_model(model):
-                return self.model(model, training=False)
-
-            process_images = self.run(images, pred_model)
-
-        generator = DataGenerator(
-            file_list=images, target_height=height, target_width=width,
-            batch_size=getattr(shared.opts, 'tagger_batch_size', 1024)
-        ).gen_ds()
-
-        orig_add_tags = QData.add_tags
-        for filepaths, image_list in tqdm(generator):
-            process_images(filepaths, image_list)
-        QData.add_tag = orig_add_tags
-        del os.environ["TF_XLA_FLAGS"]
-
-
-class MLDanbooruInterrogator(Interrogator):
-    """ Interrogator for the MLDanbooru model. """
-    def __init__(
-        self,
-        name: str,
-        repo_id: str,
-        model_path: str,
-        tags_path='classes.json',
-    ) -> None:
-        super().__init__(name)
-        self.model_path = model_path
-        self.tags_path = tags_path
-        self.repo_id = repo_id
-        self.tags = None
-        self.model = None
-
-    def download(self) -> Tuple[str, str]:
-        print(f"Loading {self.name} model file from {self.repo_id}")
-        cache = getattr(shared.opts, 'tagger_hf_cache_dir', Its.hf_cache)
-
-        model_path = hf_hub_download(
-            repo_id=self.repo_id,
-            filename=self.model_path,
-            cache_dir=cache
-        )
-        tags_path = hf_hub_download(
-            repo_id=self.repo_id,
-            filename=self.tags_path,
-            cache_dir=cache
-        )
-        return model_path, tags_path
-
-    def load(self) -> None:
-        model_path, tags_path = self.download()
-
-        ort = get_onnxrt()
-        self.model = ort.InferenceSession(model_path,
-                                          providers=onnxrt_providers)
-        print(f'Loaded {self.name} model from {model_path}')
-
-        with open(tags_path, 'r', encoding='utf-8') as filen:
-            self.tags = json.load(filen)
-
-    def interrogate(
-        self,
-        image: Image
-    ) -> Tuple[
-        Dict[str, float],  # rating confidents
-        Dict[str, float]  # tag confidents
-    ]:
-        # init model
-        if self.model is None:
-            self.load()
-
-        image = dbimutils.fill_transparent(image)
-        image = dbimutils.resize(image, 448)  # TODO CUSTOMIZE
-
-        x = asarray(image, dtype=float32) / 255
-        # HWC -> 1CHW
-        x = x.transpose((2, 0, 1))
-        x = expand_dims(x, 0)
-
-        input_ = self.model.get_inputs()[0]
-        output = self.model.get_outputs()[0]
-        # evaluate model
-        y, = self.model.run([output.name], {input_.name: x})
-
-        # Softmax
-        y = 1 / (1 + exp(-y))
-
-        tags = {tag: float(conf) for tag, conf in zip(self.tags, y.flatten())}
-        return {}, tags
-
-    def large_batch_interrogate(self, images: List, dry_run=False) -> str:
-        raise NotImplementedError()
