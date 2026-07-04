@@ -219,25 +219,40 @@ class Interrogator:
 def get_onnxrt():
     try:
         import onnxruntime
-        return onnxruntime
     except ImportError:
         # only one of these packages should be installed at one time in an env
         # https://onnxruntime.ai/docs/get-started/with-python.html#install-onnx-runtime
-        # TODO: remove old package when the environment changes?
-        from launch import is_installed, run_pip
-        if not is_installed('onnxruntime'):
-            if system() == "Darwin":
-                package_name = "onnxruntime-silicon"
-            else:
-                package_name = "onnxruntime-gpu"
-            package = os.environ.get(
-                'ONNXRUNTIME_PACKAGE',
-                package_name
-            )
+        from launch import run_pip
+        if system() == "Darwin":
+            package_name = "onnxruntime-silicon"
+        else:
+            package_name = "onnxruntime-gpu"
+        package = os.environ.get(
+            'ONNXRUNTIME_PACKAGE',
+            package_name
+        )
+        run_pip(f'install {package}', 'onnxruntime')
+        import onnxruntime
 
-            run_pip(f'install {package}', 'onnxruntime')
+    # Reconcile requested providers with what this build actually exposes.
+    # onnxruntime (CPU) and onnxruntime-gpu are separate distributions; if the
+    # CPU package is installed it never lists CUDAExecutionProvider, and no
+    # in-process reinstall can change that since the module is already loaded.
+    # Drop CUDA from the list and warn instead of letting InferenceSession
+    # silently fall back to CPU (which is why inference ran on CPU before).
+    global onnxrt_providers
+    available = onnxruntime.get_available_providers()
+    if 'CUDAExecutionProvider' in onnxrt_providers \
+            and 'CUDAExecutionProvider' not in available:
+        print(f'[Tagger] CUDAExecutionProvider requested but not available '
+              f'(have {available}). Falling back to CPU. To enable GPU, '
+              f'uninstall onnxruntime, install a CUDA-matched onnxruntime-gpu, '
+              f'then restart the webui.')
+        onnxrt_providers = [p for p in onnxrt_providers
+                            if p != 'CUDAExecutionProvider']
+        if 'CPUExecutionProvider' not in onnxrt_providers:
+            onnxrt_providers.append('CPUExecutionProvider')
 
-    import onnxruntime
     return onnxruntime
 
 
