@@ -20,8 +20,9 @@ from . import dbimutils  # pylint: disable=import-error # noqa
 Its = settings.InterrogatorSettings
 
 # select a device to process
-use_cpu = ('all' in shared.cmd_opts.use_cpu) or (
-    'interrogate' in shared.cmd_opts.use_cpu)
+use_cpu = getattr(shared.cmd_opts, 'cpu', False) or any(
+    device in ('all', 'interrogate')
+    for device in getattr(shared.cmd_opts, 'use_cpu', []))
 
 # https://onnxruntime.ai/docs/execution-providers/
 # https://github.com/toriato/stable-diffusion-webui-wd14-tagger/commit/e4ec460122cf674bbf984df30cdb10b4370c1224#r92654958
