@@ -79,14 +79,6 @@ def on_gallery() -> List:
     return QData.get_image_dups()
 
 
-def on_interrogate_image(*args) -> COMMON_OUTPUT:
-    # hack brcause image interrogaion occurs twice
-    It.odd_increment = It.odd_increment + 1
-    if It.odd_increment & 1 == 1:
-        return (None,) * 6 + ('',)
-    return on_interrogate_image_submit(*args)
-
-
 def on_interrogate_image_submit(
     image: Image, name: str, filt: str, *args
 ) -> COMMON_OUTPUT:
@@ -176,6 +168,7 @@ def on_ui_tabs():
                     with gr.TabItem(label='Single process'):
                         image = gr.Image(
                             label='Source',
+                            elem_id='tagger-single-image',
                             source='upload',
                             interactive=True,
                             type="pil"
@@ -446,9 +439,6 @@ def on_ui_tabs():
 
         # interrogation events
         image_submit.click(fn=wrap_gradio_gpu_call(on_interrogate_image_submit),
-             inputs=[image] + common_input, outputs=common_output)
-
-        image.change(fn=wrap_gradio_gpu_call(on_interrogate_image),
              inputs=[image] + common_input, outputs=common_output)
 
         batch_submit.click(fn=wrap_gradio_gpu_call(on_interrogate),

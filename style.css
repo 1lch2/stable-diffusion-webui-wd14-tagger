@@ -1,3 +1,14 @@
+#tagger-single-image {
+    height: 50vh;
+    max-height: 50vh;
+    min-height: 0;
+}
+
+#tagger-single-image img {
+    max-height: 100%;
+    object-fit: contain;
+}
+
 #rating-confidences .output-label>div:not(:first-child) {
     cursor: pointer;
 }
