@@ -256,6 +256,9 @@ def on_ui_tabs():
                                 interrogator_names[-1]
                             )
                         )
+                        # A saved default preset may still select a removed model.
+                        if interrogator.value not in interrogator_names:
+                            interrogator.value = 'WD EVA02-Large Tagger v3'
 
                         ui.create_refresh_button(
                             interrogator,

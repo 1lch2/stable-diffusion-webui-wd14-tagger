@@ -2,7 +2,7 @@
 ---
 DeepDanbooru 와 같은 모델을 통해 단일 또는 여러 이미지로부터 부루에서 사용하는 태그를 알아냅니다.
 
-[You don't know how to read Korean? Read it in English here!](README.md)
+[You don't know how to read Korean? Read it in English here!](README.original.md)
 
 ## 들어가기 앞서
 모델과 대부분의 코드는 제가 만들지 않았고 [DeepDanbooru](https://github.com/KichangKim/DeepDanbooru) 와 MrSmillingWolf 의 태거에서 가져왔습니다.

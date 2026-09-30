@@ -8,7 +8,7 @@ from platform import system
 from typing import Tuple, Dict, Callable
 from pandas import read_csv
 from PIL import Image, UnidentifiedImageError
-from numpy import asarray, float32, expand_dims
+from numpy import asarray, float32, expand_dims, exp, logaddexp
 from tqdm import tqdm
 from huggingface_hub import hf_hub_download
 
@@ -265,41 +265,30 @@ class WaifuDiffusionInterrogator(Interrogator):
         model_path='model.onnx',
         tags_path='selected_tags.csv',
         repo_id=None,
-        is_hf=True,
     ) -> None:
         super().__init__(name)
         self.repo_id = repo_id
         self.model_path = model_path
         self.tags_path = tags_path
-        self.tags = None
-        self.model = None
-        self.tags = None
-        self.local_model = None
-        self.local_tags = None
-        self.is_hf = is_hf
 
     def download(self) -> None:
         mdir = Path(shared.models_path, 'interrogators')
-        if self.is_hf:
-            cache = getattr(shared.opts, 'tagger_hf_cache_dir', Its.hf_cache)
-            print(f"Loading {self.name} model file from {self.repo_id}, "
-                  f"{self.model_path}")
+        cache = getattr(shared.opts, 'tagger_hf_cache_dir', Its.hf_cache)
+        print(f"Loading {self.name} model file from {self.repo_id}, "
+              f"{self.model_path}")
 
-            model_path = hf_hub_download(
-                repo_id=self.repo_id,
-                filename=self.model_path,
-                cache_dir=cache,
-                endpoint='https://hf-mirror.com'
-                )
-            tags_path = hf_hub_download(
-                repo_id=self.repo_id,
-                filename=self.tags_path,
-                cache_dir=cache,
-                endpoint='https://hf-mirror.com'
-                )
-        else:
-            model_path = self.local_model
-            tags_path = self.local_tags
+        model_path = hf_hub_download(
+            repo_id=self.repo_id,
+            filename=self.model_path,
+            cache_dir=cache,
+            endpoint='https://hf-mirror.com'
+        )
+        tags_path = hf_hub_download(
+            repo_id=self.repo_id,
+            filename=self.tags_path,
+            cache_dir=cache,
+            endpoint='https://hf-mirror.com'
+        )
 
         download_model = {
             'name': self.name,
@@ -384,4 +373,77 @@ class WaifuDiffusionInterrogator(Interrogator):
         # rest are regular tags
         tags = dict(tags[4:].values)
 
+        return ratings, tags
+
+
+class PixAIInterrogator(Interrogator):
+    """PixAI v1.0 ONNX inference using the repository's RGB preprocessing."""
+
+    # https://huggingface.co/bdsqlsz/pixai-tagger-v1.0-ONNX/blob/main/tagger_pipeline.py
+    repo_id = 'bdsqlsz/pixai-tagger-v1.0-ONNX'
+
+    def load(self) -> None:
+        cache = getattr(shared.opts, 'tagger_hf_cache_dir', Its.hf_cache)
+        paths = {
+            filename: hf_hub_download(
+                repo_id=self.repo_id, filename=filename, cache_dir=cache
+            )
+            for filename in ('config.json', 'preprocessor_config.json',
+                             'model.onnx')
+        }
+        with open(paths['config.json'], encoding='utf-8') as file:
+            config = json.load(file)
+        with open(paths['preprocessor_config.json'], encoding='utf-8') as file:
+            processor = json.load(file)
+
+        # Publish the session last so a failed load can be retried normally.
+        model = get_onnxrt().InferenceSession(
+            paths['model.onnx'], providers=onnxrt_providers
+        )
+        self.tags = config['tags']
+        self.tags_split = config['tags_split']
+        self.image_size = processor['size']
+        self.model = model
+        print(f'Loaded {self.name} model from {self.repo_id}')
+
+    def interrogate(self, image: Image) -> Tuple[Dict[str, float], Dict[str, float]]:
+        # Keep tensor resize/antialias behavior identical to RescalePadProcessor.
+        from torchvision.transforms import functional as TF
+
+        if self.model is None:
+            self.load()
+
+        image = TF.to_tensor(dbimutils.fill_transparent(image))
+        height, width = image.shape[-2:]
+        size = self.image_size
+        if height != size or width != size:
+            ratio = min(size / height, size / width)
+            new_height, new_width = int(height * ratio), int(width * ratio)
+            image = TF.resize(image, [new_height, new_width])
+            pad_height, pad_width = size - new_height, size - new_width
+            left, top = pad_width // 2, pad_height // 2
+            image = TF.pad(image, [left, top, pad_width - left,
+                                  pad_height - top], 0)
+        image = TF.normalize(image, [0.5] * 3, [0.5] * 3)
+        inputs = image.unsqueeze(0).numpy()
+        input_name = self.model.get_inputs()[0].name
+        output_name = self.model.get_outputs()[0].name
+        logits = self.model.run([output_name], {input_name: inputs})[0][0]
+
+        # The exported classifier returns logits; the upstream pipeline applies
+        # sigmoid before filtering. Leave filtering to the UI/API threshold.
+        probabilities = exp(-logaddexp(0, -logits.astype(float32)))
+        ratings, tags = {}, {}
+        rating_names = {'rating:g': 'general', 'rating:s': 'sensitive',
+                        'rating:q': 'questionable', 'rating:e': 'explicit'}
+        start = 0
+        for category, count in self.tags_split:
+            for index in range(start, start + count):
+                name = self.tags[index]
+                confidence = float(probabilities[index])
+                if category == 'rating':
+                    ratings[rating_names[name]] = confidence
+                else:
+                    tags[name] = confidence
+            start += count
         return ratings, tags
