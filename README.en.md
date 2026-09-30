@@ -74,7 +74,7 @@ The README shipped with this branch before the rewrite is preserved as the [orig
 
 ## Model downloads and runtime
 
-- **Cache directory**: Configure **Settings → Tagger → HuggingFace cache directory**. The default uses `HF_HOME`, then `HUGGINGFACE_HUB_CACHE`, falling back to Forge's `models/interrogators` if neither is set.
+- **Cache directory**: Defaults to `model/` inside this extension, without inheriting the default location from `HF_HOME` or `HUGGINGFACE_HUB_CACHE`. It retains HuggingFace's `models--organization--repository/snapshots/…` cache structure, and weights are excluded from Git. To use another location, change **Settings → Tagger → HuggingFace cache directory**; a saved custom path takes precedence over the default.
 - **Download endpoints**: WD EVA02 Large retains the `https://hf-mirror.com` endpoint. PixAI uses the default HuggingFace endpoint; set `HF_ENDPOINT` before starting Forge to use a mirror.
 - **Inference device**: Both models use ONNX Runtime. CUDA is tried first, with CPU fallback; CPU startup options can also force CPU execution. GPU inference requires an ONNX Runtime CUDA execution provider that can actually load. PyTorch detecting a GPU alone does not guarantee ONNX GPU execution.
 - **ONNX Runtime installation**: If importing it fails, the extension attempts installation through Forge. The default package is `onnxruntime-gpu` outside macOS and `onnxruntime-silicon` on macOS; `ONNXRUNTIME_PACKAGE` can override this. Requirements do not force a particular runtime package, preserving the environment's existing choice.

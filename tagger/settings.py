@@ -1,5 +1,5 @@
 """Settings tab entries for the tagger module"""
-import os
+from pathlib import Path
 from typing import List
 from modules import shared  # pylint: disable=import-error
 import gradio as gr
@@ -9,8 +9,7 @@ DEFAULT_KAMOJIS = '0_0, (o)_(o), +_+, +_-, ._., <o>_<o>, <|>_<|>, =_=, >_<, 3_3,
 
 DEFAULT_OFF = '[name].[output_extension]'
 
-HF_CACHE = os.environ.get('HF_HOME', os.environ.get('HUGGINGFACE_HUB_CACHE',
-           str(os.path.join(shared.models_path, 'interrogators'))))
+HF_CACHE = str(Path(__file__).resolve().parent.parent / 'model')
 
 def slider_wrapper(value, elem_id, **kwargs):
     # required or else gradio will throw errors

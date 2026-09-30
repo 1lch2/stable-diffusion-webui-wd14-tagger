@@ -272,8 +272,8 @@ class WaifuDiffusionInterrogator(Interrogator):
         self.tags_path = tags_path
 
     def download(self) -> None:
-        mdir = Path(shared.models_path, 'interrogators')
         cache = getattr(shared.opts, 'tagger_hf_cache_dir', Its.hf_cache)
+        mdir = Path(cache)
         print(f"Loading {self.name} model file from {self.repo_id}, "
               f"{self.model_path}")
 
@@ -300,7 +300,7 @@ class WaifuDiffusionInterrogator(Interrogator):
         data = [download_model]
 
         if not os.path.exists(mdir):
-            os.mkdir(mdir)
+            mdir.mkdir(parents=True, exist_ok=True)
 
         elif os.path.exists(mpath):
             with io.open(file=mpath, mode='r', encoding='utf-8') as filename:
