@@ -63,7 +63,7 @@ API 单图调用直接进入模型的 `interrogate()`，按请求中的 `thresho
 - `model/` 和 `presets/` 已被 Git 忽略。不要提交权重、缓存或个人预设；迁移应校验文件完整性和离线缓存命中。
 - WD 当前显式使用 `https://hf-mirror.com`；PixAI 使用 HuggingFace 默认端点，可通过 `HF_ENDPOINT` 配置。排查下载失败要先确认实际端点。
 - 复用 Forge 管理的 PyTorch / torchvision，不在扩展 requirements 中重复声明或擅自升级这组依赖。先检查宿主安装声明与实际环境是否满足需要。
-- `get_onnxrt()` 负责运行时导入及缺失时安装，支持 `ONNXRUNTIME_PACKAGE`。默认尝试 CUDA、允许 CPU 回退；PyTorch 能看到显卡不代表 ONNX Runtime 提供 CUDA 后端。检查 `get_available_providers()` 和实际会话的 `get_providers()`。
+- `get_onnxrt()` 根据实际 CUDA 可用性及强制 CPU 选项选择运行时；CUDA 13 自动选择 GPU 包 `>=1.27,<1.31`，CUDA 12 选择 `>=1.21,<1.27`，无 CUDA 时缺包安装 CPU 版。替换前先下载 wheel，遵守 `--skip-install`，支持 `ONNXRUNTIME_PACKAGE` 包版本覆盖；已导入运行时或 CPU/GPU 混装时提示关闭 Forge 后手动处理。GPU 路径预加载宿主 DLL。PyTorch 能看到显卡不代表 ONNX 会话实际使用 CUDA，需检查 `get_available_providers()` 和实际会话的 `get_providers()`。
 - 本工作区的 Forge 根目录是 `../..`，通常使用 `../../venv/Scripts/python.exe`。先确认实际解释器，勿用任意系统 Python 安装或验证依赖。宿主的跳过安装选项可能使扩展依赖安装脚本不执行。
 
 ## 文档约定

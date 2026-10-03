@@ -4,7 +4,9 @@ from pathlib import Path
 import io
 import json
 from re import match as re_match
-from platform import system
+import sys
+import subprocess
+from importlib.metadata import version, PackageNotFoundError
 from typing import Tuple, Dict, Callable
 from pandas import read_csv
 from PIL import Image, UnidentifiedImageError
@@ -215,45 +217,92 @@ class Interrogator:
         raise NotImplementedError()
 
 
-# FIXME this is silly, in what scenario would the env change from MacOS to
-# another OS? TODO: remove if the author does not respond.
 def get_onnxrt():
-    try:
-        import onnxruntime
-    except ImportError:
-        # only one of these packages should be installed at one time in an env
-        # https://onnxruntime.ai/docs/get-started/with-python.html#install-onnx-runtime
-        from launch import run_pip
-        if system() == "Darwin":
-            package_name = "onnxruntime-silicon"
-        else:
-            package_name = "onnxruntime-gpu"
-        package = os.environ.get(
-            'ONNXRUNTIME_PACKAGE',
-            package_name
-        )
-        run_pip(f'install {package}', 'onnxruntime')
-        import onnxruntime
+    """Reuse Forge's CUDA libraries and install a missing runtime when allowed."""
+    import torch
 
-    # Reconcile requested providers with what this build actually exposes.
-    # onnxruntime (CPU) and onnxruntime-gpu are separate distributions; if the
-    # CPU package is installed it never lists CUDAExecutionProvider, and no
-    # in-process reinstall can change that since the module is already loaded.
-    # Drop CUDA from the list and warn instead of letting InferenceSession
-    # silently fall back to CPU (which is why inference ran on CPU before).
     global onnxrt_providers
-    available = onnxruntime.get_available_providers()
-    if 'CUDAExecutionProvider' in onnxrt_providers \
-            and 'CUDAExecutionProvider' not in available:
-        print(f'[Tagger] CUDAExecutionProvider requested but not available '
-              f'(have {available}). Falling back to CPU. To enable GPU, '
-              f'uninstall onnxruntime, install a CUDA-matched onnxruntime-gpu, '
-              f'then restart the webui.')
-        onnxrt_providers = [p for p in onnxrt_providers
-                            if p != 'CUDAExecutionProvider']
-        if 'CPUExecutionProvider' not in onnxrt_providers:
-            onnxrt_providers.append('CPUExecutionProvider')
+    wants_cuda = ('CUDAExecutionProvider' in onnxrt_providers
+                  and torch.cuda.is_available() and torch.version.cuda is not None)
 
+    def installed(package):
+        try:
+            return version(package)
+        except PackageNotFoundError:
+            return None
+
+    cpu_version = installed('onnxruntime')
+    gpu_version = installed('onnxruntime-gpu')
+    # Existing GPU builds must also match Forge's CUDA major version.
+    cuda_packages = {'13': 'onnxruntime-gpu>=1.27,<1.31',
+                     '12': 'onnxruntime-gpu>=1.21,<1.27'}
+    cuda_package = cuda_packages.get(torch.version.cuda.split('.')[0]) if wants_cuda else None
+    gpu_mismatch = False
+    if wants_cuda and gpu_version and cuda_package:
+        from packaging.requirements import Requirement
+        gpu_mismatch = gpu_version not in Requirement(cuda_package).specifier
+    needs_install = (not (cpu_version or gpu_version)
+                     or (wants_cuda and not gpu_version) or gpu_mismatch)
+    if cpu_version and gpu_version:
+        raise RuntimeError(
+            'Both onnxruntime and onnxruntime-gpu are installed. Uninstall both, '
+            'reinstall one runtime, then restart Forge to avoid overlapping files.'
+        )
+    if needs_install:
+        if getattr(shared.cmd_opts, 'skip_install', False):
+            if not (cpu_version or gpu_version):
+                raise RuntimeError('ONNX Runtime is missing and --skip-install is enabled. '
+                                   'Install the runtime in Forge Python, then restart.')
+            print('[Tagger] CUDA GPU detected, but --skip-install prevents installing '
+                  'a matching GPU runtime. Install it manually and restart.')
+            if gpu_mismatch:
+                wants_cuda = False
+        else:
+            package = os.environ.get('ONNXRUNTIME_PACKAGE')
+            if not package:
+                if wants_cuda:
+                    cuda_major = torch.version.cuda.split('.')[0]
+                    # PyPI CUDA 13 builds start at 1.27; earlier builds use CUDA 12.
+                    package = cuda_package
+                    if package is None:
+                        raise RuntimeError(f'Automatic ONNX installation is not configured for '
+                                           f'CUDA {cuda_major}. Set ONNXRUNTIME_PACKAGE to a '
+                                           'compatible package or install it manually.')
+                else:
+                    package = 'onnxruntime'
+            if 'onnxruntime' in sys.modules:
+                raise RuntimeError('ONNX Runtime is already imported in this Forge process. '
+                                   'Install the matching runtime manually with Forge closed, '
+                                   'then restart; loaded native modules cannot be replaced safely.')
+            from launch import run_pip
+            # Download first so a network failure does not remove a working CPU runtime.
+            import tempfile
+            with tempfile.TemporaryDirectory(prefix='tagger-onnx-') as wheel_dir:
+                run_pip(f'download --no-deps --only-binary=:all: "{package}" '
+                        f'--dest "{wheel_dir}"', 'Tagger ONNX runtime download')
+                wheels = list(Path(wheel_dir).glob('*.whl'))
+                if len(wheels) != 1:
+                    raise RuntimeError('Expected one downloaded ONNX Runtime wheel.')
+                if wants_cuda and not wheels[0].name.startswith('onnxruntime_gpu-'):
+                    raise RuntimeError('CUDA inference requires an onnxruntime-gpu wheel.')
+                if cpu_version or gpu_version:
+                    previous = 'onnxruntime' if cpu_version else 'onnxruntime-gpu'
+                    subprocess.check_call([sys.executable, '-m', 'pip',
+                                           'uninstall', '-y', previous])
+                run_pip(f'install "{wheels[0]}"', 'Tagger ONNX runtime')
+
+    import onnxruntime
+    if wants_cuda and 'CUDAExecutionProvider' in onnxruntime.get_available_providers() \
+            and hasattr(onnxruntime, 'preload_dlls'):
+        onnxruntime.preload_dlls()
+    available = onnxruntime.get_available_providers()
+    if wants_cuda and 'CUDAExecutionProvider' in available:
+        onnxrt_providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+    else:
+        onnxrt_providers = ['CPUExecutionProvider']
+        if wants_cuda:
+            print(f'[Tagger] CUDAExecutionProvider unavailable ({available}); using CPU. '
+                  'Install a CUDA-matched onnxruntime-gpu in Forge Python and restart.')
     return onnxruntime
 
 
