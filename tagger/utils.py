@@ -9,7 +9,7 @@ interrogators: Dict[str, Interrogator] = {
         'WD EVA02-Large Tagger v3',
         repo_id='SmilingWolf/wd-eva02-large-tagger-v3'
     ),
-    'pixai-tagger-v1.0': PixAIInterrogator('PixAI Tagger v1.0'),
+    'pixai-tagger-v1.0': PixAIInterrogator('PixAI Tagger v1.0 Mixed BF16'),
 }
 
 

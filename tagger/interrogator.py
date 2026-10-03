@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import io
+import importlib.util
 import json
 from re import match as re_match
 import sys
@@ -10,7 +11,7 @@ from importlib.metadata import version, PackageNotFoundError
 from typing import Tuple, Dict, Callable
 from pandas import read_csv
 from PIL import Image, UnidentifiedImageError
-from numpy import asarray, float32, expand_dims, exp, logaddexp
+from numpy import asarray, float32, expand_dims
 from tqdm import tqdm
 from huggingface_hub import hf_hub_download
 from huggingface_hub.errors import LocalEntryNotFoundError
@@ -307,10 +308,10 @@ def get_onnxrt():
     return onnxruntime
 
 
-def download_model_file(repo_id, filename, cache_dir, endpoint=None):
+def download_model_file(repo_id, filename, cache_dir, endpoint=None, revision=None):
     """Use the cached file without contacting the Hub; download only if absent."""
     kwargs = dict(repo_id=repo_id, filename=filename,
-                  cache_dir=cache_dir, endpoint=endpoint)
+                  cache_dir=cache_dir, endpoint=endpoint, revision=revision)
     try:
         path = hf_hub_download(**kwargs, local_files_only=True)
     except LocalEntryNotFoundError:
@@ -440,10 +441,11 @@ class WaifuDiffusionInterrogator(Interrogator):
 
 
 class PixAIInterrogator(Interrogator):
-    """PixAI v1.0 ONNX inference using the repository's RGB preprocessing."""
+    """PixAI mixed BF16 inference with the upstream PyTorch implementation."""
 
-    # https://huggingface.co/bdsqlsz/pixai-tagger-v1.0-ONNX/blob/main/tagger_pipeline.py
-    repo_id = 'bdsqlsz/pixai-tagger-v1.0-ONNX'
+    repo_id = 'DraconicDragon/pixai-tagger-v1.0-mixed-bf16'
+    # Pin the reviewed model code and weights to the same revision.
+    revision = 'b7b4ce5b5d8e3c24a1171ff2b266e3345761eb0e'
     default_thresholds = {
         'general': 0.17, 'character': 0.27, 'style': 0.15,
         'copyright': 0.24, 'meta': 0.17, 'rating': 0.41,
@@ -453,7 +455,8 @@ class PixAIInterrogator(Interrogator):
         """Read category metadata even when predictions come from the cache."""
         if not hasattr(self, '_tag_categories'):
             cache = getattr(shared.opts, 'tagger_hf_cache_dir', Its.hf_cache)
-            path = download_model_file(self.repo_id, 'config.json', cache)
+            path = download_model_file(self.repo_id, 'config.json', cache,
+                                       revision=self.revision)
             with open(path, encoding='utf-8') as file:
                 config = json.load(file)
             categories = {}
@@ -466,56 +469,79 @@ class PixAIInterrogator(Interrogator):
         return self._tag_categories
 
     def load(self) -> None:
+        import torch
+        from safetensors.torch import load_file
+        from transformers.modeling_utils import no_init_weights
+
         cache = getattr(shared.opts, 'tagger_hf_cache_dir', Its.hf_cache)
         paths = {
             filename: download_model_file(
-                repo_id=self.repo_id, filename=filename, cache_dir=cache
+                repo_id=self.repo_id, filename=filename, cache_dir=cache,
+                revision=self.revision,
             )
             for filename in ('config.json', 'preprocessor_config.json',
-                             'model.onnx')
+                             'model.safetensors', 'tagger_pipeline.py')
         }
+        # Execute only the pinned, reviewed upstream implementation.
+        if not hasattr(self, '_pipeline'):
+            spec = importlib.util.spec_from_file_location(
+                'tagger_pixai_mixed_bf16', paths['tagger_pipeline.py'])
+            pipeline = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(pipeline)
+            self._pipeline = pipeline
+        pipeline = self._pipeline
         with open(paths['config.json'], encoding='utf-8') as file:
-            config = json.load(file)
+            config = pipeline.ViTDetClsConfig(**json.load(file))
         with open(paths['preprocessor_config.json'], encoding='utf-8') as file:
-            processor = json.load(file)
+            processor = pipeline.RescalePadProcessor(**json.load(file))
 
-        # Publish the session last so a failed load can be retried normally.
-        model = get_onnxrt().InferenceSession(
-            paths['model.onnx'], providers=onnxrt_providers
-        )
-        self.tags = config['tags']
-        self.tags_split = config['tags_split']
-        self.image_size = processor['size']
+        with no_init_weights():
+            model = pipeline.ViTDetCls(config)
+        # assign=True preserves each saved tensor's dtype, including the FP32
+        # head. A blanket model.bfloat16() or from_pretrained dtype would not.
+        model.load_state_dict(load_file(paths['model.safetensors']), strict=True,
+                              assign=True)
+        device = torch.device('cpu')
+        extra_device = shared.cmd_opts.additional_device_ids
+        force_cpu = (extra_device.startswith('cpu:') if extra_device is not None
+                     else use_cpu)
+        if not force_cpu and torch.cuda.is_available():
+            device_id = getattr(shared.cmd_opts, 'device_id', None)
+            if extra_device is not None:
+                device_id = extra_device.split(':')[1]
+            device = torch.device('cuda' if device_id is None else f'cuda:{device_id}')
+        model.to(device=device).eval()
+        self.tags = config.tags
+        self.tags_split = config.tags_split
+        self.processor = processor
+        # Publish last so download/load failures can be retried.
         self.model = model
-        print(f'Loaded {self.name} model from {self.repo_id}')
+        print(f'Loaded {self.name} model from {self.repo_id} on {device} '
+              '(BF16 backbone, FP32 head)')
+
+    def unload(self) -> bool:
+        import torch
+
+        device = next(self.model.parameters()).device if self.model is not None else None
+        unloaded = super().unload()
+        if unloaded and device.type == 'cuda':
+            with torch.cuda.device(device):
+                torch.cuda.empty_cache()
+        return unloaded
 
     def interrogate(self, image: Image) -> Tuple[Dict[str, float], Dict[str, float]]:
-        # Keep tensor resize/antialias behavior identical to RescalePadProcessor.
-        from torchvision.transforms import functional as TF
+        import torch
 
         if self.model is None:
             self.load()
 
-        image = TF.to_tensor(dbimutils.fill_transparent(image))
-        height, width = image.shape[-2:]
-        size = self.image_size
-        if height != size or width != size:
-            ratio = min(size / height, size / width)
-            new_height, new_width = int(height * ratio), int(width * ratio)
-            image = TF.resize(image, [new_height, new_width])
-            pad_height, pad_width = size - new_height, size - new_width
-            left, top = pad_width // 2, pad_height // 2
-            image = TF.pad(image, [left, top, pad_width - left,
-                                  pad_height - top], 0)
-        image = TF.normalize(image, [0.5] * 3, [0.5] * 3)
-        inputs = image.unsqueeze(0).numpy()
-        input_name = self.model.get_inputs()[0].name
-        output_name = self.model.get_outputs()[0].name
-        logits = self.model.run([output_name], {input_name: inputs})[0][0]
+        with torch.inference_mode(), torch.autocast(
+                device_type=self.model.device.type, enabled=False):
+            inputs = self.processor(image, return_tensors='pt')['pixel_values']
+            inputs = inputs.to(device=self.model.device,
+                               dtype=self.model.patch_embed.proj.weight.dtype)
+            probabilities = self.model(inputs).float().sigmoid()[0].cpu().numpy()
 
-        # The exported classifier returns logits; the upstream pipeline applies
-        # sigmoid before filtering. Leave filtering to the UI/API threshold.
-        probabilities = exp(-logaddexp(0, -logits.astype(float32)))
         ratings, tags = {}, {}
         rating_names = {'rating:g': 'general', 'rating:s': 'sensitive',
                         'rating:q': 'questionable', 'rating:e': 'explicit'}

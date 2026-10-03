@@ -4,18 +4,18 @@
 
 为 Stable Diffusion WebUI Forge / Forge Neo 提供图像标签识别：上传单张图片或批量读取本地目录，输出标签、置信度和内容评级，也可通过 HTTP API 调用。
 
-本项目继续沿用 **WD14 Tagger** 名称。WD Tagger 系列现仅保留表现最好的 **WD EVA02-Large Tagger v3**，原始仓库支持的其他 Tagger 均已移除；本分支另外新增了 **PixAI Tagger v1.0 ONNX** 支持。它依赖 Forge 的运行环境，不是独立应用。
+本项目继续沿用 **WD14 Tagger** 名称。WD Tagger 系列现仅保留表现最好的 **WD EVA02-Large Tagger v3**，原始仓库支持的其他 Tagger 均已移除；本分支另外新增了 **PixAI Tagger v1.0 Mixed BF16** 支持。它依赖 Forge 的运行环境，不是独立应用。
 
 ## 支持的模型
 
 | 界面名称                 | API 模型标识               | 模型来源                                                                                            |
 | ------------------------ | -------------------------- | --------------------------------------------------------------------------------------------------- |
 | WD EVA02-Large Tagger v3 | `wd-eva02-large-tagger-v3` | [SmilingWolf/wd-eva02-large-tagger-v3](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3) |
-| PixAI Tagger v1.0        | `pixai-tagger-v1.0`        | [bdsqlsz/pixai-tagger-v1.0-ONNX](https://huggingface.co/bdsqlsz/pixai-tagger-v1.0-ONNX)             |
+| PixAI Tagger v1.0        | `pixai-tagger-v1.0`        | [DraconicDragon/pixai-tagger-v1.0-mixed-bf16](https://huggingface.co/DraconicDragon/pixai-tagger-v1.0-mixed-bf16)             |
 
-PixAI 使用社区转换的 ONNX 权重，原模型来自 [pixai-labs/pixai-tagger-v1.0](https://huggingface.co/pixai-labs/pixai-tagger-v1.0)。首次使用会下载约 1.98 GB 的 `model.onnx`，以及 `config.json`、`preprocessor_config.json`。
+PixAI 使用 DraconicDragon 转换的混合 BF16 Safetensors 权重，原模型来自 [pixai-labs/pixai-tagger-v1.0](https://huggingface.co/pixai-labs/pixai-tagger-v1.0)。首次使用会下载约 1.04 GB 的 `model.safetensors`、`config.json`、`preprocessor_config.json` 和 `tagger_pipeline.py`，固定到已检查的版本 `b7b4ce5b5d8e3c24a1171ff2b266e3345761eb0e`。主体保留 BF16，分类头保留 FP32，并使用作者在分类头前转换精度的实现。
 
-两个模型分别使用各自的预处理流程。PixAI 按仓库实现进行 RGB 转换、透明背景转白色、等比例缩放、补黑边及归一化，再将 ONNX 输出转换为标签置信度。其 general、character、copyright、style、meta 标签合并到标签结果中，rating 单独输出为 general、sensitive、questionable、explicit。
+两个模型分别使用各自的预处理流程。PixAI 按仓库实现进行 RGB 转换、透明背景转白色、等比例缩放、补黑边及归一化，再对 PyTorch 输出应用 sigmoid 得到标签置信度。其 general、character、copyright、style、meta 标签合并到标签结果中，rating 单独输出为 general、sensitive、questionable、explicit。
 
 旧版 ViT、ConvNeXT、SwinV2、MOAT 等模型及本地 ONNX 自动扫描已移除，`--onnxtagger-path` 参数不再支持。已有的旧模型文件不会自动删除。
 
@@ -83,9 +83,9 @@ git clone https://github.com/1lch2/stable-diffusion-webui-wd14-tagger.git extens
 
 - **缓存目录**：默认保存到本扩展根目录的 `model/`，不再从 `HF_HOME` 或 `HUGGINGFACE_HUB_CACHE` 继承默认位置。目录内保留 HuggingFace 的 `models--组织--仓库/snapshots/…` 缓存结构，权重不会纳入 Git。需要其他位置时，可在 **Settings → Tagger → HuggingFace cache directory** 中修改；已保存的自定义路径优先于默认值。
 - **下载端点**：WD EVA02 Large 保留原有的 `https://hf-mirror.com` 下载端点；PixAI 使用 HuggingFace 默认端点，可在启动 Forge 前通过 `HF_ENDPOINT` 指定镜像。
-- **推理设备**：两个模型均使用 ONNX Runtime。默认尝试 CUDA，再回退 CPU；CPU 启动选项也可强制使用 CPU。实际是否使用 GPU 取决于 ONNX Runtime 是否提供并能加载 CUDA 执行后端，仅 PyTorch 能识别显卡并不足以保证 ONNX 使用 GPU。
+- **推理设备**：WD 使用 ONNX Runtime；PixAI 使用 PyTorch SDPA，优先 CUDA，CPU 启动选项可强制 CPU。PixAI 按权重原始精度加载，不依赖 ONNX CUDA 后端。WD 的 GPU 推理仍要求可用的 ONNX CUDA 执行后端。
 - **ONNX Runtime 安装**：默认复用已安装的运行时。有可用 NVIDIA CUDA 设备且未强制 CPU 时，优先使用 GPU 版；缺失 GPU 版或版本不匹配时，根据 Forge 的 PyTorch CUDA 版本自动选择安装包（CUDA 13：`>=1.27,<1.31`；CUDA 12：`>=1.21,<1.27`）。无 CUDA 时缺包安装 CPU 版。替换前先下载 wheel，再卸载旧版，避免 CPU/GPU 两个发行包混装；可用 `ONNXRUNTIME_PACKAGE` 指定包版本。`--skip-install` 会禁止自动安装；进程已导入 ONNX 或存在混装时，会提示关闭 Forge 后手动处理并重启。其他 CUDA 主版本需手动安装匹配版本。
-- **PixAI 预处理**：复用 Forge 本体安装和管理的 `torchvision` / PyTorch，扩展 requirements 不再单独声明这两项。模型推理本身仍由 ONNX Runtime 执行，无需加载仓库中的 Transformers 模型代码。
+- **PixAI 依赖与缓存**：复用 Forge 环境已安装的 PyTorch、torchvision、Transformers、timm 和 safetensors，不自动安装或升级。使用固定版本的上游模型及预处理代码；保留原始置信度供现有分类阈值、全局阈值与 API 筛选。新模型使用独立结果缓存名称，旧 ONNX 权重不会自动删除。
 
 ## HTTP API
 
@@ -112,12 +112,12 @@ git clone https://github.com/1lch2/stable-diffusion-webui-wd14-tagger.git extens
 ## 常见问题
 
 - **下载失败**：查看控制台中实际失败的文件和下载端点，检查网络与缓存目录权限。PixAI 和 WD 使用的默认端点不同。
-- **只有 CPU 推理**：查看 ONNX Runtime 的执行后端与控制台日志；安装 CPU 版运行时不会提供 CUDA 后端。调整运行时环境后需要重启 Forge。
+- **只有 CPU 推理**：先检查 CPU 启动选项。WD 检查 ONNX Runtime 执行后端；PixAI 检查 PyTorch CUDA 可用性与加载日志中的设备。调整运行时环境后需要重启 Forge。
 - **没有期望的标签**：检查所选模型、阈值、排除标签和最大显示数量；两个模型的标签集合及置信度分布不同。
 - **缺少 Python 依赖**：使用启动 Forge 的同一个 Python 环境安装 requirements，再重启。
 
 ## 致谢与授权
 
-本扩展沿用 [stable-diffusion-webui-wd14-tagger](https://github.com/picobyte/stable-diffusion-webui-wd14-tagger) 的代码与工作流程。感谢 SmilingWolf、PixAI Labs、ONNX 转换作者 bdsqlsz，以及原项目贡献者。
+本扩展沿用 [stable-diffusion-webui-wd14-tagger](https://github.com/picobyte/stable-diffusion-webui-wd14-tagger) 的代码与工作流程。感谢 SmilingWolf、PixAI Labs、混合 BF16 转换作者 DraconicDragon、先前 ONNX 转换作者 bdsqlsz，以及原项目贡献者。
 
 原仓库将代码声明为 Public domain，但借用的代码（例如 `dbimutils.py`）除外；模型权重和相关文件的授权以各自模型仓库为准。

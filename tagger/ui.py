@@ -375,8 +375,9 @@ def on_ui_tabs():
         unload_all_models.click(fn=unload_interrogators, outputs=[info])
 
         interrogator.change(
-            fn=lambda name: (gr.update(visible=name != 'PixAI Tagger v1.0'),
-                             gr.update(visible=name == 'PixAI Tagger v1.0')),
+            fn=lambda name: (
+                gr.update(visible=name != utils.interrogators['pixai-tagger-v1.0'].name),
+                gr.update(visible=name == utils.interrogators['pixai-tagger-v1.0'].name)),
             inputs=[interrogator], outputs=[threshold, pixai_options])
         pixai_use_global.change(
             fn=lambda enabled: (gr.update(interactive=enabled),

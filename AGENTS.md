@@ -2,7 +2,7 @@
 
 ## 项目定位与工作约定
 
-- 本仓库是 Stable Diffusion WebUI Forge / Forge Neo 的 Python 扩展，继续使用 WD14 Tagger 名称；不是独立应用。界面基于 Gradio，API 基于 FastAPI，模型推理使用 ONNX Runtime。
+- 本仓库是 Stable Diffusion WebUI Forge / Forge Neo 的 Python 扩展，继续使用 WD14 Tagger 名称；不是独立应用。界面基于 Gradio，API 基于 FastAPI，WD 推理使用 ONNX Runtime，PixAI 使用 PyTorch。
 - 默认使用中文沟通，先说明结果，区分代码事实、推断、实际验证和未验证部分。
 - 优先在现有架构内做简单修改；保留用户已有改动，不因相邻问题扩大范围。没有明确要求时，不提交、推送或切换分支。
 - 本文件是导航和约定，当前代码与用户指令优先。环境版本、缓存位置和服务状态应现场检查，不把旧会话结果当作当前验收。
@@ -14,7 +14,7 @@
 | API 标识 | 实现 | HuggingFace 仓库 |
 | --- | --- | --- |
 | `wd-eva02-large-tagger-v3` | `WaifuDiffusionInterrogator` | `SmilingWolf/wd-eva02-large-tagger-v3` |
-| `pixai-tagger-v1.0` | `PixAIInterrogator` | `bdsqlsz/pixai-tagger-v1.0-ONNX` |
+| `pixai-tagger-v1.0` | `PixAIInterrogator` | `DraconicDragon/pixai-tagger-v1.0-mixed-bf16` |
 
 - WD 系列仅保留 WD EVA02-Large v3；原仓库支持的其他 Tagger 已移除，PixAI 是本分支新增支持。
 - 本地 ONNX 自动扫描及 `--onnxtagger-path` 已移除。不要根据历史 README 或旧比较文档恢复这些功能，除非用户要求。
@@ -26,7 +26,7 @@
 | --- | --- |
 | `scripts/tagger.py` | Forge 扩展入口，注册界面、设置和 API 回调 |
 | `tagger/ui.py` | Gradio 页面、事件绑定、单图/批量提交、结果显示 |
-| `tagger/interrogator.py` | 下载、ONNX 会话、模型预处理和推理、卸载，以及单图/批量公共流程 |
+| `tagger/interrogator.py` | 下载、模型加载、模型预处理和推理、卸载，以及单图/批量公共流程 |
 | `tagger/utils.py` | 模型注册与模型列表 |
 | `tagger/uiset.py` | `IOData` 管理图片与输出路径；`QData` 管理查询缓存、标签过滤、评级、JSON 数据库和标签文件 |
 | `tagger/settings.py` | Forge 设置项与默认模型缓存目录 |
@@ -35,7 +35,7 @@
 | `style.css`、`javascript/` | 界面样式与前端交互 |
 | `install.py`、`requirements.txt`、`preload.py` | 扩展依赖安装与启动参数 |
 
-单图路径：按钮点击 → `on_interrogate_image_submit()` → 模型实例的 `interrogate_image()` → 缓存命中或 `interrogate()` → `QData` 过滤与汇总 → 界面输出。排查结果不变时，注意查询缓存以图片内容哈希和模型名称区分。
+单图路径：按钮点击 → `on_interrogate_image_submit()` → 模型实例的 `interrogate_image()` → 缓存命中或 `interrogate()` → `QData` 过滤与汇总 → 界面输出。排查结果不变时，注意查询缓存以图片内容哈希和模型名称区分。PixAI 混合 BF16 使用新名称 `PixAI Tagger v1.0 Mixed BF16` 隔离旧 ONNX 结果，API 标识保持不变。
 
 API 单图调用直接进入模型的 `interrogate()`，按请求中的 `threshold` 筛选标签。接口为 `GET /tagger/v1/interrogators`、`POST /tagger/v1/interrogate` 和 `POST /tagger/v1/unload-interrogators`；评级不受该标签阈值筛选。
 
@@ -50,10 +50,11 @@ API 单图调用直接进入模型的 `interrogate()`，按请求中的 `thresho
 ## 两种模型的推理差异
 
 - **WD EVA02 Large**：下载 `model.onnx` 和 `selected_tags.csv`；透明背景转白色、RGB 转 BGR、补白边为正方形后缩放，输入为 NHWC float32。输出直接作为置信度；CSV 前四项是评级。
-- **PixAI**：下载 `model.onnx`、`config.json` 和 `preprocessor_config.json`。预处理遵循模型仓库的 `tagger_pipeline.py`：RGB、透明背景转白色、torchvision 张量缩放、等比例缩放到配置尺寸（当前为 1008）、居中补黑边、归一化到 `[-1, 1]`，输入为 NCHW。
-- PixAI 的 ONNX 输出为 logits，必须做 sigmoid；标签顺序和分类区间由 `config.json` 的 `tags`、`tags_split` 决定，不能套用 WD 的前四项评级规则。
+- **PixAI**：下载固定版本 `b7b4ce5b5d8e3c24a1171ff2b266e3345761eb0e` 的 `model.safetensors`、`config.json`、`preprocessor_config.json` 和 `tagger_pipeline.py`。使用该版本上游 PyTorch 模型与预处理：RGB、透明背景转白色、torchvision 张量等比例缩放至 1008、居中补黑边、归一化到 `[-1, 1]`，输入 NCHW。
+- PixAI 使用 `load_state_dict(assign=True)` 保留权重精度：主体 BF16，`head.*` FP32；上游 forward 在分类头前转换输入精度，注意力调用 PyTorch SDPA。不能将整个模型强制转 BF16，也不再使用 ONNX。
+- PixAI 输出 logits，必须做 sigmoid；标签顺序和分类区间由 `config.json` 的 `tags`、`tags_split` 决定，不能套用 WD 的前四项评级规则。
 - PixAI 将 general、character、copyright、style、meta 合并为标签；rating 映射为 general、sensitive、questionable、explicit。保留置信度给现有 UI/API 过滤，不预先应用原仓库的分类阈值。
-- 保持 torchvision 的张量缩放行为，不随意替换为 PIL/OpenCV 缩放。PixAI 不需要执行下载仓库中的 Transformers 模型代码。
+- 保持 torchvision 的张量缩放行为，不随意替换为 PIL/OpenCV 缩放。PixAI 执行固定版本中已检查的模型代码，复用已安装的 Transformers、timm、safetensors，不自动改动环境。
 
 ## 模型文件与运行环境
 
