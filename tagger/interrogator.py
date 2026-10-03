@@ -11,6 +11,7 @@ from PIL import Image, UnidentifiedImageError
 from numpy import asarray, float32, expand_dims, exp, logaddexp
 from tqdm import tqdm
 from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import LocalEntryNotFoundError
 
 from modules import shared
 from tagger import settings  # pylint: disable=import-error
@@ -256,6 +257,19 @@ def get_onnxrt():
     return onnxruntime
 
 
+def download_model_file(repo_id, filename, cache_dir, endpoint=None):
+    """Use the cached file without contacting the Hub; download only if absent."""
+    kwargs = dict(repo_id=repo_id, filename=filename,
+                  cache_dir=cache_dir, endpoint=endpoint)
+    try:
+        path = hf_hub_download(**kwargs, local_files_only=True)
+    except LocalEntryNotFoundError:
+        print(f'[Tagger] Cache miss: {repo_id}/{filename}; downloading to {cache_dir}')
+        return hf_hub_download(**kwargs)
+    print(f'[Tagger] Using local file: {path}')
+    return path
+
+
 class WaifuDiffusionInterrogator(Interrogator):
     """ Interrogator for Waifu Diffusion models """
     def __init__(
@@ -276,13 +290,13 @@ class WaifuDiffusionInterrogator(Interrogator):
         print(f"Loading {self.name} model file from {self.repo_id}, "
               f"{self.model_path}")
 
-        model_path = hf_hub_download(
+        model_path = download_model_file(
             repo_id=self.repo_id,
             filename=self.model_path,
             cache_dir=cache,
             endpoint='https://hf-mirror.com'
         )
-        tags_path = hf_hub_download(
+        tags_path = download_model_file(
             repo_id=self.repo_id,
             filename=self.tags_path,
             cache_dir=cache,
@@ -384,7 +398,7 @@ class PixAIInterrogator(Interrogator):
     def load(self) -> None:
         cache = getattr(shared.opts, 'tagger_hf_cache_dir', Its.hf_cache)
         paths = {
-            filename: hf_hub_download(
+            filename: download_model_file(
                 repo_id=self.repo_id, filename=filename, cache_dir=cache
             )
             for filename in ('config.json', 'preprocessor_config.json',

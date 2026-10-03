@@ -74,6 +74,8 @@ git clone https://github.com/1lch2/stable-diffusion-webui-wd14-tagger.git extens
 
 ## 模型下载与运行环境
 
+加载时优先读取所选缓存目录中的本地文件，命中后不联系 HuggingFace；只有缺失的文件才会联网下载。已有缓存不会自动检查远端更新。控制台会分别显示本地文件路径或缓存缺失后的下载提示。
+
 - **缓存目录**：默认保存到本扩展根目录的 `model/`，不再从 `HF_HOME` 或 `HUGGINGFACE_HUB_CACHE` 继承默认位置。目录内保留 HuggingFace 的 `models--组织--仓库/snapshots/…` 缓存结构，权重不会纳入 Git。需要其他位置时，可在 **Settings → Tagger → HuggingFace cache directory** 中修改；已保存的自定义路径优先于默认值。
 - **下载端点**：WD EVA02 Large 保留原有的 `https://hf-mirror.com` 下载端点；PixAI 使用 HuggingFace 默认端点，可在启动 Forge 前通过 `HF_ENDPOINT` 指定镜像。
 - **推理设备**：两个模型均使用 ONNX Runtime。默认尝试 CUDA，再回退 CPU；CPU 启动选项也可强制使用 CPU。实际是否使用 GPU 取决于 ONNX Runtime 是否提供并能加载 CUDA 执行后端，仅 PyTorch 能识别显卡并不足以保证 ONNX 使用 GPU。
