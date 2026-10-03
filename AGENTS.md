@@ -27,11 +27,10 @@
 | `scripts/tagger.py` | Forge 扩展入口，注册界面、设置和 API 回调 |
 | `tagger/ui.py` | Gradio 页面、事件绑定、单图/批量提交、结果显示 |
 | `tagger/interrogator.py` | 下载、ONNX 会话、模型预处理和推理、卸载，以及单图/批量公共流程 |
-| `tagger/utils.py` | 模型注册、模型列表与预设实例 |
+| `tagger/utils.py` | 模型注册与模型列表 |
 | `tagger/uiset.py` | `IOData` 管理图片与输出路径；`QData` 管理查询缓存、标签过滤、评级、JSON 数据库和标签文件 |
 | `tagger/settings.py` | Forge 设置项与默认模型缓存目录 |
 | `tagger/api.py`、`tagger/api_models.py` | `/tagger/v1` 接口及请求/响应模型 |
-| `tagger/preset.py` | 预设保存和加载 |
 | `tagger/dbimutils.py` | 透明背景处理及 WD 图像缩放工具 |
 | `style.css`、`javascript/` | 界面样式与前端交互 |
 | `install.py`、`requirements.txt`、`preload.py` | 扩展依赖安装与启动参数 |
@@ -44,7 +43,8 @@ API 单图调用直接进入模型的 `interrogate()`，按请求中的 `thresho
 
 - 上传、拖入、替换或清空单图，只更新上传组件；不自动加载模型或推理。单图推理仅由 `image_submit.click` 触发，不要重新绑定 `image.change`、`upload` 或 `input` 到推理函数。
 - 单图上传组件使用 `elem_id='tagger-single-image'`，`style.css` 将其高度限制为 `50vh`，图片按比例适配。样式应限定在此组件内。
-- 默认预设选择已移除模型时，界面初始化回退到 WD EVA02 Large。
+- 预设行及保存、加载实现已移除，不读取旧预设文件。界面默认选择 WD EVA02 Large，阈值为 0.3。
+- PixAI 专属控件仅在选中该模型时显示；默认按类别过滤（general 0.17、character 0.27、style 0.15、copyright 0.24、meta 0.17、rating 0.41）。「使用全局阈值」默认关闭，全局值默认 0.2，开启后包含 rating 在内全部类别使用全局值。单图和批量在提交时读取阈值，缓存仍存原始置信度。HTTP API 保留原有 threshold 契约。
 - 多个界面操作使用七项 `COMMON_OUTPUT`。修改事件或错误处理时检查返回项数及 Forge 包装器的错误路径，避免原始错误被 Gradio 输出数量错误掩盖。
 
 ## 两种模型的推理差异

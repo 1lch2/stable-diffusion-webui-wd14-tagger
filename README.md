@@ -40,17 +40,23 @@ git clone https://github.com/1lch2/stable-diffusion-webui-wd14-tagger.git extens
 .\venv\Scripts\python.exe -m pip install -r .\extensions\stable-diffusion-webui-wd14-tagger\requirements.txt
 ```
 
-更新扩展后也需要重启 Forge。默认预设若仍选择已移除的模型，界面初始化时会回退到 WD EVA02 Large。
+更新扩展后也需要重启 Forge。界面默认选择 WD EVA02 Large。预设行及保存、加载功能已移除，旧预设文件不再读取。
 
 ## 使用方式
 
 ### 单张图片
 
 1. 打开 **Single process**，在 **Source** 上传图片。
-2. 选择 **Interrogator**，设置 **Weight threshold**。
+2. 选择 **Interrogator**，按下述规则设置阈值。
 3. 点击 **Interrogate image**，在 **Ratings and included tags** 查看标签与评级置信度；被过滤的标签显示在 **Excluded tags**。
 
-阈值越高，保留的标签越少。PixAI 同样使用界面阈值，不预先应用原模型的分类阈值，因此可以调低阈值查看更多标签。
+阈值越高，保留的标签越少。单图与批量使用相同的阈值设置：
+
+- **WD EVA02 Large**：**Weight threshold** 默认 `0.3`。
+- **PixAI**：仅选择该模型时显示专属控件，默认按类别过滤：general `0.17`、character `0.27`、style `0.15`、copyright `0.24`、meta `0.17`、rating `0.41`。
+- PixAI 的 **使用全局阈值** 默认关闭；勾选后启用默认 `0.2` 的 **PixAI 全局阈值**，所有类别（包括 rating）统一使用该值，分类阈值暂不生效。
+
+切换模型保留当前页面内各模型的阈值设置。上传图片和调整阈值不触发推理；点击按钮后应用当前设置，缓存命中时重新过滤原始置信度。
 
 ### 批量处理
 
@@ -64,7 +70,6 @@ git clone https://github.com/1lch2/stable-diffusion-webui-wd14-tagger.git extens
 ### 标签整理与模型卸载
 
 - 通过 **Additional tags**、**Keep tag**、**Exclude tag** 以及搜索替换选项整理标签。
-- 使用 **Preset** 保存和加载常用设置。
 - **Combine interrogations** 可累积查询结果。
 - 勾选 **Unload model after running** 可在界面任务完成后卸载模型，也可点击 **Unload all interrogate models** 手动卸载。
 

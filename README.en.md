@@ -40,17 +40,23 @@ The extension installer installs the dependencies in `requirements.txt`. If your
 .\venv\Scripts\python.exe -m pip install -r .\extensions\stable-diffusion-webui-wd14-tagger\requirements.txt
 ```
 
-Restart Forge after updating the extension as well. If a saved default preset selects a removed model, the interface falls back to WD EVA02 Large during initialization.
+Restart Forge after updating the extension as well. The interface defaults to WD EVA02 Large. The preset row and save/load functionality have been removed; old preset files are no longer read.
 
 ## Usage
 
 ### Single image
 
 1. Open **Single process** and upload an image under **Source**.
-2. Select an **Interrogator** and set **Weight threshold**.
+2. Select an **Interrogator** and configure the thresholds described below.
 3. Click **Interrogate image**. View tags and rating scores under **Ratings and included tags**; filtered tags appear under **Excluded tags**.
 
-Higher thresholds retain fewer tags. PixAI also uses the interface threshold instead of applying the original model's category thresholds beforehand, so you can lower the threshold to see more tags.
+Higher thresholds retain fewer tags. Single-image and batch processing share these settings:
+
+- **WD EVA02 Large**: **Weight threshold** defaults to `0.3`.
+- **PixAI**: Model-specific controls appear only when selected. Category defaults are general `0.17`, character `0.27`, style `0.15`, copyright `0.24`, meta `0.17`, and rating `0.41`.
+- **使用全局阈值** (Use global threshold) is off by default. Enabling it activates **PixAI 全局阈值** (PixAI global threshold), defaulting to `0.2`, for every category including rating. Category thresholds are then inactive.
+
+Switching models preserves their threshold settings within the current page. Uploading images or changing thresholds does not run inference. Clicking the button applies the current settings, re-filtering raw confidence scores on cache hits.
 
 ### Batch processing
 
@@ -64,7 +70,6 @@ By default, tag files share the image basename and use the `.txt` extension. **S
 ### Tag editing and model unloading
 
 - Organize tags with **Additional tags**, **Keep tag**, **Exclude tag**, and the search/replace controls.
-- Save and load frequently used settings with **Preset**.
 - Use **Combine interrogations** to accumulate query results.
 - Enable **Unload model after running** to unload the model after an interface task, or click **Unload all interrogate models** to unload manually.
 

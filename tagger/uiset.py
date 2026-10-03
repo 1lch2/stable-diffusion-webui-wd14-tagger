@@ -202,7 +202,9 @@ class QData:
     exclude_tags = []
     search_tags = {}
     replace_tags = []
-    threshold = 0.35
+    threshold = 0.3
+    # Model name -> (global threshold, per-tag thresholds, rating threshold).
+    model_thresholds = {}
     tag_frac_threshold = 0.05
     count_threshold = getattr(shared.opts, 'tagger_count_threshold', 100)
 
@@ -484,7 +486,12 @@ class QData:
         return tag
 
     @classmethod
-    def apply_filters(cls, data) -> None:
+    def cached_model_names(cls):
+        # Query keys are a 64-character SHA-256 digest followed by model name.
+        return {index: key[64:] for key, (_, index) in cls.query.items()}
+
+    @classmethod
+    def apply_filters(cls, data, model_name=None) -> None:
         """ apply filters to query data, store in db.json if required """
         # data = (path, fi_key, tags, ratings, new)
         # fi_key == '' means this is a new file or interrogation for that file
@@ -493,13 +500,16 @@ class QData:
 
         fi_key = data[2]
         index = len(cls.query)
+        threshold, tag_thresholds, rating_threshold = cls.model_thresholds.get(
+            model_name or fi_key[64:], (cls.threshold, {}, 0.0))
 
         ratings = sorted(data[3].items(), key=lambda x: x[1], reverse=True)
         # loop over ratings
         for rating, val in ratings:
             if fi_key != '':
                 cls.weighed[0][rating].append(val + index)
-            cls.ratings[rating] += val
+            if val >= rating_threshold:
+                cls.ratings[rating] += val
 
         max_ct = cls.count_threshold - len(cls.add_tags)
         count = 0
@@ -514,9 +524,10 @@ class QData:
                 cls.weighed[1][tag].append(val + index)
 
             if count < max_ct:
+                tag_threshold = tag_thresholds.get(tag, threshold)
                 tag = cls.correct_tag(tag)
                 if tag not in cls.keep_tags:
-                    if cls.is_excluded(tag) or val < cls.threshold:
+                    if cls.is_excluded(tag) or val < tag_threshold:
                         if tag not in cls.add_tags and \
                            len(cls.discarded_tags) < max_ct:
                             cls.discarded_tags[tag].append(val)
@@ -553,12 +564,13 @@ class QData:
                     cls.in_db[i][3+index][ent] = val
 
         # process the retrieved from db and add them to the stats
-        for got in cls.in_db.values():
+        model_names = cls.cached_model_names()
+        for index, got in cls.in_db.items():
             no_floats = sorted(filter(lambda x: not isinstance(x[0], float),
                                got[3].items()), key=lambda x: x[0])
             sorted_tags = ','.join(f'({k},{v:.1f})' for (k, v) in no_floats)
             QData.image_dups[sorted_tags].add(got[0])
-            cls.apply_filters(got)
+            cls.apply_filters(got, model_names[index])
 
         # average
         return cls.finalize(count)

@@ -1,14 +1,8 @@
 """Utility functions for the tagger module"""
 from typing import List, Dict
-from pathlib import Path
-
-from modules import scripts  # pylint: disable=import-error
-from tagger.preset import Preset  # pylint: disable=import-error
 from tagger.interrogator import Interrogator  # pylint: disable=E0401
 from tagger.interrogator import WaifuDiffusionInterrogator  # pylint: disable=E0401 # noqa: E501
 from tagger.interrogator import PixAIInterrogator
-
-preset = Preset(Path(scripts.basedir(), 'presets'))
 
 interrogators: Dict[str, Interrogator] = {
     'wd-eva02-large-tagger-v3': WaifuDiffusionInterrogator(

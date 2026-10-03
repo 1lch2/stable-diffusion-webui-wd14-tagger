@@ -143,8 +143,9 @@ class Interrogator:
 
             QData.apply_filters(data)
 
-        for got in QData.in_db.values():
-            QData.apply_filters(got)
+        model_names = QData.cached_model_names()
+        for index, got in QData.in_db.items():
+            QData.apply_filters(got, model_names[index])
 
         Interrogator.output = QData.finalize(count)
 
@@ -443,6 +444,26 @@ class PixAIInterrogator(Interrogator):
 
     # https://huggingface.co/bdsqlsz/pixai-tagger-v1.0-ONNX/blob/main/tagger_pipeline.py
     repo_id = 'bdsqlsz/pixai-tagger-v1.0-ONNX'
+    default_thresholds = {
+        'general': 0.17, 'character': 0.27, 'style': 0.15,
+        'copyright': 0.24, 'meta': 0.17, 'rating': 0.41,
+    }
+
+    def tag_categories(self):
+        """Read category metadata even when predictions come from the cache."""
+        if not hasattr(self, '_tag_categories'):
+            cache = getattr(shared.opts, 'tagger_hf_cache_dir', Its.hf_cache)
+            path = download_model_file(self.repo_id, 'config.json', cache)
+            with open(path, encoding='utf-8') as file:
+                config = json.load(file)
+            categories = {}
+            start = 0
+            for category, count in config['tags_split']:
+                for tag in config['tags'][start:start + count]:
+                    categories[tag] = category
+                start += count
+            self._tag_categories = categories
+        return self._tag_categories
 
     def load(self) -> None:
         cache = getattr(shared.opts, 'tagger_hf_cache_dir', Its.hf_cache)

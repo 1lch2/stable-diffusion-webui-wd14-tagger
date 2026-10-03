@@ -13,6 +13,7 @@ try:
 except ImportError:
     from webui import wrap_gradio_gpu_call  # pylint: disable=import-error
 from tagger import utils  # pylint: disable=import-error
+from tagger.interrogator import PixAIInterrogator
 from tagger.interrogator import Interrogator as It  # pylint: disable=E0401
 from tagger.uiset import IOData, QData  # pylint: disable=import-error
 
@@ -48,6 +49,23 @@ def unload_interrogators() -> Tuple[str]:
     return (f'{unloaded_models} model(s) unloaded{remaining_models}',)
 
 
+def configure_thresholds(interrogator, wd_threshold, use_global, global_threshold,
+                         *category_values):
+    """Apply the values submitted with the button, including cached queries."""
+    if isinstance(interrogator, PixAIInterrogator):
+        categories = dict(zip(interrogator.default_thresholds, category_values))
+        tag_thresholds = {} if use_global else {
+            tag: categories[category]
+            for tag, category in interrogator.tag_categories().items()
+            if category != 'rating'
+        }
+        rating_threshold = global_threshold if use_global else categories['rating']
+        QData.model_thresholds[interrogator.name] = (
+            global_threshold, tag_thresholds, rating_threshold)
+    else:
+        QData.model_thresholds[interrogator.name] = (wd_threshold, {}, 0.0)
+
+
 def on_interrogate(
     input_glob: str, output_dir: str, name: str, filt: str, *args
 ) -> COMMON_OUTPUT:
@@ -60,7 +78,7 @@ def on_interrogate(
     if len(IOData.err) > 0:
         return (None,) * 6 + (IOData.error_msg(),)
 
-    for i, val in enumerate(args):
+    for i, val in enumerate(args[:len(TAG_INPUTS)]):
         part = TAG_INPUTS[i]
         if val != It.input[part]:
             getattr(QData, "update_" + part)(val)
@@ -71,6 +89,7 @@ def on_interrogate(
     if interrogator is None:
         return (None,) * 6 + (f"'{name}': invalid interrogator",)
 
+    configure_thresholds(interrogator, *args[len(TAG_INPUTS):])
     interrogator.batch_interrogate()
     return search_filter(filt)
 
@@ -82,7 +101,7 @@ def on_gallery() -> List:
 def on_interrogate_image_submit(
     image: Image, name: str, filt: str, *args
 ) -> COMMON_OUTPUT:
-    for i, val in enumerate(args):
+    for i, val in enumerate(args[:len(TAG_INPUTS)]):
         part = TAG_INPUTS[i]
         if val != It.input[part]:
             getattr(QData, "update_" + part)(val)
@@ -95,6 +114,7 @@ def on_interrogate_image_submit(
     if interrogator is None:
         return (None,) * 6 + (f"'{name}': invalid interrogator",)
 
+    configure_thresholds(interrogator, *args[len(TAG_INPUTS):])
     interrogator.interrogate_image(image)
     return search_filter(filt)
 
@@ -156,7 +176,6 @@ def search_filter(filt: str) -> COMMON_OUTPUT:
 
 def on_ui_tabs():
     """ configures the ui on the tagger tab """
-    # If checkboxes misbehave you have to adapt the default.json preset
     tag_input = {}
 
     with gr.Blocks(analytics_enabled=False) as tagger_interface:
@@ -179,15 +198,13 @@ def on_ui_tabs():
                         )
 
                     with gr.TabItem(label='Batch from directory'):
-                        input_glob = utils.preset.component(
-                            gr.Textbox,
+                        input_glob = gr.Textbox(
                             value='',
                             label='Input directory - To recurse use ** or */* '
                                   'in your glob; also check the settings tab.',
                             placeholder='/path/to/images or to/images/**/*'
                         )
-                        output_dir = utils.preset.component(
-                            gr.Textbox,
+                        output_dir = gr.Textbox(
                             value=It.input["output_dir"],
                             label='Output directory',
                             placeholder='Leave blank to save images '
@@ -199,8 +216,7 @@ def on_ui_tabs():
                             variant='primary'
                         )
                         with gr.Row(variant='compact'):
-                            save_tags = utils.preset.component(
-                                gr.Checkbox,
+                            save_tags = gr.Checkbox(
                                 label='Save to tags files',
                                 value=True
                             )
@@ -213,46 +229,17 @@ def on_ui_tabs():
 
                 # interrogator selector
                 with gr.Column():
-                    # preset selector
-                    with gr.Row(variant='compact'):
-                        available_presets = utils.preset.list()
-                        selected_preset = gr.Dropdown(
-                            label='Preset',
-                            choices=available_presets,
-                            value=available_presets[0]
-                        )
-
-                        save_preset_button = gr.Button(
-                            value=ui.save_style_symbol
-                        )
-
-                        ui.create_refresh_button(
-                            selected_preset,
-                            lambda: None,
-                            lambda: {'choices': utils.preset.list()},
-                            'refresh_preset'
-                        )
-
                     with gr.Row(variant='compact'):
                         def refresh():
                             utils.refresh_interrogators()
                             return sorted(x.name for x in utils.interrogators
                                                                .values())
                         interrogator_names = refresh()
-                        interrogator = utils.preset.component(
-                            gr.Dropdown,
+                        interrogator = gr.Dropdown(
                             label='Interrogator',
                             choices=interrogator_names,
-                            value=(
-                                None
-                                if len(interrogator_names) < 1 else
-                                interrogator_names[-1]
-                            )
+                            value=utils.interrogators['wd-eva02-large-tagger-v3'].name
                         )
-                        # A saved default preset may still select a removed model.
-                        if interrogator.value not in interrogator_names:
-                            interrogator.value = 'WD EVA02-Large Tagger v3'
-
                         ui.create_refresh_button(
                             interrogator,
                             lambda: None,
@@ -264,57 +251,61 @@ def on_ui_tabs():
                         value='Unload all interrogate models'
                     )
                     with gr.Row(variant='compact'):
-                        tag_input["add"] = utils.preset.component(
-                            gr.Textbox,
+                        tag_input["add"] = gr.Textbox(
                             label='Additional tags (comma split)',
                             elem_id='additional-tags'
                         )
                     with gr.Row(variant='compact'):
-                        threshold = utils.preset.component(
-                            gr.Slider,
+                        threshold = gr.Slider(
                             label='Weight threshold',
                             minimum=0,
                             maximum=1,
-                            value=QData.threshold
+                            value=0.3
                         )
-                        tag_frac_threshold = utils.preset.component(
-                            gr.Slider,
+                        tag_frac_threshold = gr.Slider(
                             label='Min tag fraction in batch and '
                                   'interrogations',
                             minimum=0,
                             maximum=1,
                             value=QData.tag_frac_threshold,
                         )
+                    with gr.Column(visible=False) as pixai_options:
+                        pixai_use_global = gr.Checkbox(
+                            label='使用全局阈值', value=False)
+                        pixai_global = gr.Slider(
+                            label='PixAI 全局阈值', minimum=0, maximum=1,
+                            step=0.01, value=0.2, interactive=False)
+                        with gr.Column() as pixai_categories:
+                            category_sliders = [
+                                gr.Slider(label=f'{category} 阈值', minimum=0,
+                                          maximum=1, step=0.01, value=value)
+                                for category, value in
+                                PixAIInterrogator.default_thresholds.items()
+                            ]
                     with gr.Row(variant='compact'):
-                        cumulative = utils.preset.component(
-                            gr.Checkbox,
+                        cumulative = gr.Checkbox(
                             label='Combine interrogations',
                             value=False
                         )
-                        unload_after = utils.preset.component(
-                            gr.Checkbox,
+                        unload_after = gr.Checkbox(
                             label='Unload model after running',
                             value=False
                         )
                     with gr.Row(variant='compact'):
-                        tag_input["search"] = utils.preset.component(
-                            gr.Textbox,
+                        tag_input["search"] = gr.Textbox(
                             label='Search tag, .. ->',
                             elem_id='search-tags'
                         )
-                        tag_input["replace"] = utils.preset.component(
-                            gr.Textbox,
+                        tag_input["replace"] = gr.Textbox(
                             label='-> Replace tag, ..',
                             elem_id='replace-tags'
                         )
                     with gr.Row(variant='compact'):
-                        tag_input["keep"] = utils.preset.component(
-                            gr.Textbox,
+                        tag_input["keep"] = gr.Textbox(
                             label='Keep tag, ..',
                             elem_id='keep-tags'
                         )
-                        tag_input["exclude"] = utils.preset.component(
-                            gr.Textbox,
+                        tag_input["exclude"] = gr.Textbox(
                             label='Exclude tag, ..',
                             elem_id='exclude-tags'
                         )
@@ -332,8 +323,7 @@ def on_ui_tabs():
                             variant='secondary'
                         )
                     with gr.Column(variant='compact'):
-                        tag_search_selection = utils.preset.component(
-                            gr.Textbox,
+                        tag_search_selection = gr.Textbox(
                             label='Multi string search: part1, part2.. '
                                   '(Enter key to update)',
                         )
@@ -382,21 +372,18 @@ def on_ui_tabs():
 
         save_tags.input(fn=IOData.flip_save_tags(), inputs=[], outputs=[])
 
-        # Preset and unload buttons
-        selected_preset.change(fn=utils.preset.apply, inputs=[selected_preset],
-                               outputs=[*utils.preset.components, info])
-
-        save_preset_button.click(fn=utils.preset.save, inputs=[selected_preset,
-                                 *utils.preset.components], outputs=[info])
-
         unload_all_models.click(fn=unload_interrogators, outputs=[info])
 
-        # Sliders
-        threshold.input(fn=QData.set("threshold"), inputs=[threshold],
-                        outputs=[])
-        threshold.release(fn=QData.set("threshold"), inputs=[threshold],
-                          outputs=[])
+        interrogator.change(
+            fn=lambda name: (gr.update(visible=name != 'PixAI Tagger v1.0'),
+                             gr.update(visible=name == 'PixAI Tagger v1.0')),
+            inputs=[interrogator], outputs=[threshold, pixai_options])
+        pixai_use_global.change(
+            fn=lambda enabled: (gr.update(interactive=enabled),
+                                gr.update(visible=not enabled)),
+            inputs=[pixai_use_global], outputs=[pixai_global, pixai_categories])
 
+        # Sliders
         tag_frac_threshold.input(fn=QData.set("tag_frac_threshold"),
                                  inputs=[tag_frac_threshold], outputs=[])
         tag_frac_threshold.release(fn=QData.set("tag_frac_threshold"),
@@ -435,13 +422,16 @@ def on_ui_tabs():
             outputs=[tag_search_selection, tag_input["exclude"], info])
 
         common_input = [interrogator, tag_search_selection] + \
-                       [tag_input[tag] for tag in TAG_INPUTS]
+                       [tag_input[tag] for tag in TAG_INPUTS] + \
+                       [threshold, pixai_use_global, pixai_global, *category_sliders]
 
         # interrogation events
-        image_submit.click(fn=wrap_gradio_gpu_call(on_interrogate_image_submit),
+        image_submit.click(fn=wrap_gradio_gpu_call(
+            on_interrogate_image_submit, extra_outputs=[None] * 6),
              inputs=[image] + common_input, outputs=common_output)
 
-        batch_submit.click(fn=wrap_gradio_gpu_call(on_interrogate),
+        batch_submit.click(fn=wrap_gradio_gpu_call(
+            on_interrogate, extra_outputs=[None] * 6),
                            inputs=[input_glob, output_dir] + common_input,
                            outputs=common_output)
 
