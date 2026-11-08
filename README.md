@@ -43,7 +43,7 @@ git clone https://github.com/1lch2/stable-diffusion-webui-wd14-tagger.git extens
 ## 下载与环境配置
 
 * **缓存路径**：模型默认下载至本插件目录下的 `model/` 文件夹（不读取系统 `HF_HOME` 环境变量），可在 **Settings → Tagger → HuggingFace cache directory** 中自定义路径。本地已有文件时不会联网检查。
-* **下载镜像**：WD 模型默认走 `[https://hf-mirror.com](https://hf-mirror.com)` 下载；PixAI 模型使用 HuggingFace 官方源，国内网络建议在启动 Forge 前配置环境变量 `HF_ENDPOINT=[https://hf-mirror.com](https://hf-mirror.com)`。
+* **下载镜像**：WD 模型默认走 [https://hf-mirror.com](https://hf-mirror.com) 下载；PixAI 模型使用 HuggingFace 官方源，国内网络建议在启动 Forge 前配置环境变量 `HF_ENDPOINT=https://hf-mirror.com`。
 * **ONNX 环境（仅 WD 模型需要）**：插件会根据 Forge 的 PyTorch CUDA 版本（支持 CUDA 12 / 13）自动安装匹配的 `onnxruntime-gpu`。如需指定版本，可通过环境变量 `ONNXRUNTIME_PACKAGE` 覆盖。
 
 ## HTTP API
